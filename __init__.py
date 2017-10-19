@@ -1,1 +1,1 @@
-from segment_classifier import *
+from nslr_hmm import *
