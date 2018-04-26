@@ -3,11 +3,16 @@ import matplotlib.pyplot as plt
 import scipy.signal
 import nslr_hmm
 
+# Simulate a dummy recording session
 t = np.arange(0, 5, 0.01)
 saw = ((t*10)%10)/10.0*10.0 # 10 deg/second sawtooth
-eye = np.vstack(( saw, -saw )).T
+horiz_gaze = saw
+vert_gaze = -saw
+eye = np.vstack(( horiz_gaze, vert_gaze )).T
 eye += np.random.randn(*eye.shape)*0.1
 
+# Segment the data and classify the segments in one go using
+# the default parameters.
 sample_class, segmentation, seg_class = nslr_hmm.classify_gaze(t, eye)
 
 COLORS = {
