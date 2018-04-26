@@ -119,7 +119,7 @@ def forward_backward(transition_probs, observations, initial_probs=None):
     state_probs /= np.sum(state_probs, axis=1).reshape(-1, 1)
     return state_probs, forward_probs, backward_probs
 
-def dataset_segments(data, **nslrargs):
+def dataset_features(data, **nslrargs):
     segments = ((nslr.fit_gaze(ts, xs, **nslrargs), outliers) for ts, xs, outliers in data)
     features = [list(segment_features(s.segments, o)) for s, o in segments]
     return features
@@ -135,87 +135,106 @@ def transition_estimates(obs, trans, forward, backward):
         ests[i,start,end] = forward[i,start]*b*trans[start,end]
     return ests
 
-def reestimate_observations(sessions,
+def reestimate_observations_baum_welch(sessions,
         transition_probs=GazeTransitionModel,
         observation_model=GazeObservationModel,
-        initial_probs=None):
+        initial_probs=None,
+        estimate_observation_model=True,
+        estimate_transition_model=True,
+        n_iterations=30,
+        plot_process=False):
     
     all_observations = np.vstack(sessions)
     
-    import matplotlib.pyplot as plt
-    CLASS_COLORS = {
-    1: 'b',
-    2: 'r',
-    3: 'y',
-    4: 'g',
-    5: 'm',
-    6: 'c',
-    22: 'orange'
-    }
+    if plot_process:
+        import matplotlib.pyplot as plt
+        CLASS_COLORS = {
+        1: 'b',
+        2: 'r',
+        3: 'y',
+        4: 'g',
+        5: 'm',
+        6: 'c',
+        22: 'orange'
+        }
 
-    #plt.plot(all_observations[:,0], all_observations[:,1], '.', alpha=0.1, color='black')
-    for iteration in range(100):
+    for iteration in range(n_iterations): # Should probably have a nicer stopping criterion
         all_state_probs = []
         all_transition_probs = []
+
+        # Compute state and transition probabilities
+        # for all segments using the forward-backward algorithm
         for features in sessions:
             liks = np.array([observation_model.liks(f) for f in features])
             probs, forward, backward = forward_backward(transition_probs, liks, initial_probs)
             all_state_probs.extend(probs)
             all_transition_probs.append(transition_estimates(liks, transition_probs, forward, backward))
+
         all_state_probs = np.array(all_state_probs)
         all_transition_probs = np.vstack(all_transition_probs)
-        winner = np.argmax(all_state_probs, axis=1)
-        for cls in np.unique(winner):
-            my = winner == cls
-            plt.plot(all_observations[my,0], all_observations[my,1], '.', alpha=0.1, color=CLASS_COLORS[cls+1])
+        if plot_process:
+            winner = np.argmax(all_state_probs, axis=1)
+            for cls in np.unique(winner):
+                my = winner == cls
+                plt.plot(all_observations[my,0], all_observations[my,1], '.', alpha=0.1, color=CLASS_COLORS[cls+1])
         dists = {}
+
+        # Estimate the observation model using
+        # mean and covariance of the observations weighted
+        # by probability of a segment belonging to a given
+        # class.
         for i, cls in enumerate(observation_model.idxclass):
             w = all_state_probs[:,i]
             wsum = np.sum(w)
             w /= wsum
-            #for end in range(len(transition_probs)):
-            #    transition_probs[i, end] = np.sum(all_transition_probs[:,i,end])/wsum
-            #valid = np.ones(len(all_observations), dtype=bool)
             mean = np.average(all_observations, weights=w, axis=0)
             cov = np.cov(all_observations, aweights=w, rowvar=False)
-            #cov = np.diag(np.diag(cov))
-            #cov[1,1] = observation_model.dists[i].cov[1,1]
-            #cov = observation_model.dists[i].cov
-            #mean[1] = observation_model.dists[i].mean[1]
-            plt.plot(mean[0], mean[1], 'o', color=CLASS_COLORS[cls])
+            if plot_process:
+                plt.plot(mean[0], mean[1], 'o', color=CLASS_COLORS[cls])
             dists[cls] = scipy.stats.multivariate_normal(mean, cov)
-        plt.pause(0.1)
-        plt.cla()
-        transition_probs /= np.sum(transition_probs, axis=1).reshape(-1, 1)
-        print(transition_probs)
-        observation_model=ObservationModel(dists)
-    return observation_model
+        if plot_process:
+            plt.pause(0.1)
+            plt.cla()
+        
+        if estimate_transition_model:
+            # Take a mean of all sessions. This may be unoptimal.
+            transition_probs = np.mean(all_transition_probs, axis=0)
+            transition_probs /= np.sum(transition_probs, axis=1).reshape(-1, 1)
+        if estimate_observation_model:
+            observation_model=ObservationModel(dists)
+    return transition_probs, observation_model
 
-from sklearn.covariance import MinCovDet
-def reestimate_observations(sessions,
+def reestimate_observations_viterbi_robust(
+        sessions,
         transition_probs=GazeTransitionModel,
         observation_model=GazeObservationModel,
-        initial_probs=None):
-    
+        initial_probs=None,
+        estimate_observation_model=True,
+        estimate_transition_model=True,
+        n_iterations=30,
+        plot_process=False):
+        
+    from sklearn.covariance import MinCovDet
     all_observations = np.vstack(sessions)
     
-    import matplotlib.pyplot as plt
-    CLASS_COLORS = {
-    1: 'b',
-    2: 'r',
-    3: 'y',
-    4: 'g',
-    5: 'm',
-    6: 'c',
-    22: 'orange'
-    }
+    if plot_process:
+        import matplotlib.pyplot as plt
+        CLASS_COLORS = {
+        1: 'b',
+        2: 'r',
+        3: 'y',
+        4: 'g',
+        5: 'm',
+        6: 'c',
+        22: 'orange'
+        }
     
     N = len(transition_probs)
     if initial_probs is None:
         initial_probs = np.ones(N)
         initial_probs /= np.sum(initial_probs)
-    #plt.plot(all_observations[:,0], all_observations[:,1], '.', alpha=0.1, color='black')
-    for iteration in range(100):
+    
+    for iteration in range(n_iterations):
         all_states = []
         all_transitions = np.zeros((N, N))
         for features in sessions:
@@ -225,33 +244,50 @@ def reestimate_observations(sessions,
                 all_transitions[states[i], states[i+1]] += 1
             all_states.extend(states)
         all_states = np.array(all_states)
-        for cls in np.unique(states):
-            my = all_states == cls
-            plt.plot(all_observations[my,0], all_observations[my,1], '.', alpha=0.1, color=CLASS_COLORS[cls+1])
+        if plot_process:
+            for cls in np.unique(states):
+                my = all_states == cls
+                plt.plot(all_observations[my,0], all_observations[my,1], '.', alpha=0.1, color=CLASS_COLORS[cls+1])
+        
         dists = {}
-        print("ITER", iteration)
         for i, cls in enumerate(observation_model.idxclass):
-            #for end in range(len(transition_probs)):
-            #    transition_probs[i, end] = all_transitions[i,end]
-            #valid = np.ones(len(all_observations), dtype=bool)
             my = all_states == i
-            mean = np.average(all_observations[my], axis=0)
-            #cov = np.cov(all_observations[my], rowvar=False)
-            #mean[1] = observation_model.dists[i].mean[1]
-            cov = observation_model.dists[i].cov
+
+            # Don't reestimate if such class is not found
+            if np.sum(my) < 2:
+                dists[cls] = observation_model.dists[cls]
+                continue
+            
+            # Use this for non-robust
+            #mean = np.average(all_observations[my], axis=0)
+            #cov = observation_model.dists[i].cov
             
             robust = MinCovDet().fit(all_observations[my])
             mean = robust.location_
-            covar = robust.covariance_
-            print(cls, ':', [mean.tolist(), (covar).tolist()])
-            plt.plot(mean[0], mean[1], 'o', color=CLASS_COLORS[cls])
+            cov = robust.covariance_
             dists[cls] = scipy.stats.multivariate_normal(mean, cov)
-        plt.pause(0.1)
-        plt.cla()
-        transition_probs /= np.sum(transition_probs, axis=1).reshape(-1, 1)
-        observation_model=ObservationModel(dists)
-    return observation_model
+            
+            if plot_process:
+                plt.plot(mean[0], mean[1], 'o', color=CLASS_COLORS[cls])
+        if plot_process:
+            plt.pause(0.1)
+            plt.cla()
 
+        if estimate_transition_model:
+            new_transition_probs = all_transitions
+            totals = np.sum(new_transition_probs, axis=1).reshape(-1, 1)
+            new_transition_probs /= totals
+            
+            # Avoid nans in transitions. If the algorithm
+            # gets zeros here, the estimate will likely be quite bad
+            not_seen = totals.flatten() == 0
+            new_transition_probs[not_seen,:] = transition_probs[not_seen,:]
+            
+            transition_probs = new_transition_probs
+
+        if estimate_observation_model:
+            observation_model=ObservationModel(dists)
+    return transition_probs, observation_model
 
 def segment_features(segments, outliers=None):
     prev_direction = np.array([0.0, 0.0])
@@ -287,7 +323,10 @@ def classify_segments(segments,
     return observation_model.idxclass[path]
     
 def classify_gaze(ts, xs, **kwargs):
-    segmentation = nslr.fit_gaze(ts, xs, **kwargs)
+    fit_params = {k: kwargs[k]
+            for k in ('structural_error', 'optimize_noise', 'split_likelihood') if k in kwargs
+    }
+    segmentation = nslr.fit_gaze(ts, xs, **fit_params)
     seg_classes = classify_segments(segmentation.segments)
     sample_classes = np.zeros(len(ts))
     for c, s in zip(seg_classes, segmentation.segments):
