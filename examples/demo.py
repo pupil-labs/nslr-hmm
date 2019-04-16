@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.signal
-import nslr_hmm
+import ..nslr_hmm
 
 # Simulate a dummy recording session
 t = np.arange(0, 5, 0.01)

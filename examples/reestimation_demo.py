@@ -13,7 +13,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.signal
-import nslr_hmm
+import ..nslr_hmm
 
 # Generate simulated recording sessions. Note
 # that these are not representative of real
